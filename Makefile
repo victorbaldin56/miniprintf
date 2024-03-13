@@ -39,10 +39,12 @@ CXXFLAGS += -O3 -D NDEBUG
 endif
 
 all: main.cpp.o miniprintf.o
-	@ld -e main.cpp.o miniprintf.o
+	@g++ main.cpp.o miniprintf.o -z noexecstack -no-pie
+
+debug:
+	@edb --run a.out
 
 main.cpp.o:
-	@mkdir -p build
 	@$(CXX) $(CXXFLAGS) -c main.cpp -o main.cpp.o
 
 miniprintf.o:
