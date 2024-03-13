@@ -34,6 +34,8 @@ miniprintf:
 
 miniprintf_cdecl:
     mov rsi, [rsp + 8]  ; fmt string
+    mov rbp, rsp
+    add rbp, 8 * 2      ; fmt arguements pointer
 
 .print_str:
     mov rcx, buffer_size
@@ -46,8 +48,11 @@ miniprintf_cdecl:
     je .format
     stosb
     loop .load_char
+.flush:
     push rsi
+    push rbp
     flush buffer, buffer_size
+    pop rbp
     pop rsi
     jmp .print_str
 .format:
@@ -60,18 +65,29 @@ miniprintf_cdecl:
     flush buffer, rcx
     ret
 
+%macro return_to_printf 0
+    dec rcx
+    cmp cx, 0
+    je miniprintf_cdecl.flush
+    jmp miniprintf_cdecl.load_char
+%endmacro
+
 no_format:
     mov al, '%'
-    cmp rcx, 0
-    je .flush
-    dec rcx
-.continue:
-    dec rsi
     stosb
-    jmp miniprintf_cdecl.load_char
-.flush:
-    flush buffer, buffer_size
-    jmp .continue
+    dec rsi
+    return_to_printf
+
+percent_format:
+    mov al, '%'
+    stosb
+    return_to_printf
+
+char_format:
+    mov al, byte [rbp]
+    stosb
+    add rbp, 8
+    return_to_printf
 
 section .rodata
 buffer_size equ 0x20
@@ -80,4 +96,8 @@ format_jmp_table_size equ 0x100
 section .data
 buffer db buffer_size dup(0)
 miniprintf_ret_addr dq 0
-format_jmp_table dq format_jmp_table_size dup(no_format)
+format_jmp_table dq '%' dup(no_format)
+                 dq percent_format
+                 dq 'c' - '%' - 1 dup(no_format)
+                 dq char_format
+                 dq format_jmp_table_size - 'c' - 1 dup(no_format)
