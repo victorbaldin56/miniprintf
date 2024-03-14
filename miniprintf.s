@@ -32,6 +32,19 @@ miniprintf:
     push qword [miniprintf_ret_addr]
     ret
 
+%macro flush_buffer 0
+    push rsi
+    push rbp
+    push rax
+    flush buffer, buffer_size
+    pop rax
+    pop rbp
+    pop rsi
+    mov rcx, buffer_size
+    mov rdi, buffer
+    jmp .continue
+%endmacro
+
 miniprintf_cdecl:
     mov rsi, [rsp + 8]  ; fmt string
     mov rbp, rsp
@@ -40,21 +53,16 @@ miniprintf_cdecl:
 .print_str:
     mov rcx, buffer_size
     mov rdi, buffer
-.load_char:
+.continue:
     lodsb
     cmp al, 0
     je .exit
     cmp al, '%'
     je .format
     stosb
-    loop .load_char
+    loop .continue
 .flush:
-    push rsi
-    push rbp
-    flush buffer, buffer_size
-    pop rbp
-    pop rsi
-    jmp .print_str
+    flush_buffer
 .format:
     lodsb 
     jmp [format_jmp_table + rax * 8]
@@ -68,7 +76,12 @@ miniprintf_cdecl:
 %macro return_to_printf 0
     cmp rcx, 0
     je miniprintf_cdecl.flush
-    jmp miniprintf_cdecl.load_char
+    jmp miniprintf_cdecl.continue
+%endmacro
+
+%macro get_next_arg 0
+    add rbp, 8
+    return_to_printf
 %endmacro
 
 no_format:
@@ -87,9 +100,8 @@ percent_format:
 char_format:
     mov al, byte [rbp]
     stosb
-    add rbp, 8
     dec rcx
-    return_to_printf
+    get_next_arg
 
 string_format:
     push rsi    ; Save fmt addr
@@ -105,22 +117,92 @@ string_format:
     dec rcx
     jmp .print_str 
 .flush:
-    flush buffer, buffer_size
-    mov rcx, buffer_size
-    jmp .continue
+    flush_buffer
 .exit:
-    add rbp, 8
     pop rsi
-    return_to_printf
+    get_next_arg
+
+%macro get_decimal_digit 0
+    mov eax, edx
+    xor edx, edx
+    div r15d        ; quotient (eax) is current digit, the rest is in remainder (edx)
+    push rax        ;   |
+    push rdx        ;   |
+                    ;   |
+    xor edx, edx    ;   |
+    mov eax, r15d   ;   |
+    mov r14, 10
+    div r14         ;   |
+    mov r15d, eax   ;   |
+                    ;   |
+    pop rdx         ;   |
+    pop rax         ;<--+ 
+%endmacro
+
+decimal_format:
+    mov edx, dword [rbp]
+    cmp edx, 0
+    je .zero
+    jg .unsigned
+
+    mov al, '-'
+    stosb
+    dec rcx
+
+.unsigned:
+    mov edx, dword [rbp]
+    cmp edx, 0
+    jge .positive
+    neg edx
+
+.positive:
+    mov r15d, 1000000000   ; To start from left to right
+    push rcx
+    mov rcx, 10            ; Max number of leading zeroes to skip
+
+.skip_leading_zeroes:
+    get_decimal_digit
+    cmp eax, 0
+    jne .print_decimal
+    loop .skip_leading_zeroes
+
+.print_decimal:
+    pop rcx
+
+.continue:
+    cmp rcx, 0
+    je .flush
+    add al, '0'
+    stosb
+    cmp r15d, 0
+    je .exit
+    get_decimal_digit
+    dec rcx
+    jmp .continue
+
+.zero:
+    mov al, '0'
+    stosb
+    dec rcx
+    jmp .exit
+
+.flush:
+    flush_buffer
+
+.exit:
+    dec rcx
+    get_next_arg
 
 section .rodata
-buffer_size equ 0x20
+buffer_size equ 32
+hex_digits db '0123456789abcdef'
 format_jmp_table_size equ 0x100
 format_jmp_table    dq '%' dup(no_format)
                     dq percent_format 
                     dq 'c' - '%' - 1 dup(no_format)
                     dq char_format
-                    dq 's' - 'c' - 1 dup(no_format)
+                    dq decimal_format
+                    dq 's' - 'd' - 1 dup(no_format)
                     dq string_format
                     dq format_jmp_table_size - 's' - 1 dup(no_format)
 
