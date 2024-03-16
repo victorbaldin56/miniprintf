@@ -36,7 +36,15 @@ miniprintf:
     push rsi
     push rbp
     push rax
+    push rdx
+    push r13
+    push r14
+    push r15
     flush buffer, buffer_size
+    pop r15
+    pop r14
+    pop r13
+    pop rdx
     pop rax
     pop rbp
     pop rsi
@@ -193,18 +201,99 @@ decimal_format:
     dec rcx
     get_next_arg
 
+binary_format:
+    mov r15, 1
+    jmp bit_format
+
+octal_format:
+    mov r15, 3
+    jmp bit_format
+
+hex_format:
+    mov r15, 4
+    jmp bit_format
+
+%macro shr_mask 0
+    push rcx
+    mov cl, r15b
+    shr r14, cl
+    pop rcx
+    sub cl, r15b
+%endmacro
+
+;==============================================================================
+; Formats %b, %x, %o
+; Entry: [rbp] -- number (dword), r15b -- bits per digit (%b -- 1, %o -- 3, %x -- 4)
+;==============================================================================
+bit_format:
+    push rax
+    mov eax, [rbp]
+    mov r14, [bit_masks + r15 * 8]      ; get initial mask
+    push rcx
+    mov cl, [bit_offsets + r15]         ; get initial offset
+
+.skip_leading_zeroes:
+    mov edx, eax
+    and edx, r14d
+    cmp edx, 0
+    jne .print_bits
+    cmp cl, r15b
+    je .print_bits
+    shr_mask
+    jmp .skip_leading_zeroes 
+
+.continue:
+    push rcx
+    mov cl, r13b         ; get initial offset
+
+.print_bits:
+    mov r13b, cl
+    pop rcx
+    cmp rcx, 0
+    je .flush
+    dec rcx
+    push rcx 
+    and edx, r14d
+    mov cl, r13b
+    shr edx, cl
+    and rdx, 0xff
+    mov dl, [hex_digits + rdx]
+    mov [rdi], dl
+    inc di
+    and rcx, 0xff
+    cmp cl, 0
+    je .exit
+    shr_mask
+    mov edx, eax
+    jmp .print_bits
+
+.flush:
+    flush_buffer
+    
+.exit:
+    pop rcx
+    pop rax
+    get_next_arg
+
 section .rodata
 buffer_size equ 32
 hex_digits db '0123456789abcdef'
+bit_offsets  db 0, 31, 0, 30, 28   ; offset to bit mask to obtain the first digit
+bit_masks   dq 0, 0x1 << 31, 0, 0x7 << 30, 0xf << 28
 format_jmp_table_size equ 0x100
 format_jmp_table    dq '%' dup(no_format)
-                    dq percent_format 
-                    dq 'c' - '%' - 1 dup(no_format)
+                    dq percent_format
+                    dq 'b' - '%' - 1 dup(no_format)
+                    dq binary_format
                     dq char_format
                     dq decimal_format
-                    dq 's' - 'd' - 1 dup(no_format)
+                    dq 'o' - 'd' - 1 dup(no_format)
+                    dq octal_format
+                    dq 's' - 'o' - 1 dup(no_format)
                     dq string_format
-                    dq format_jmp_table_size - 's' - 1 dup(no_format)
+                    dq 'x' - 's' - 1 dup(no_format)
+                    dq hex_format
+                    dq format_jmp_table_size - 'x' - 1 dup(no_format)
 
 section .data
 buffer db buffer_size dup(0)
